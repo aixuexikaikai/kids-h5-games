@@ -1,0 +1,9 @@
+node_modules/
+games/legacy-source/
+qa/artifacts/*.log
+qa/artifacts/*.png
+qa/artifacts/*.webm
+playwright-report/
+test-results/
+.DS_Store
+

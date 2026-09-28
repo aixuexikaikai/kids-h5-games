@@ -1,0 +1,21 @@
+import {World} from './World.js';import {AssetRegistry} from '../assets/AssetRegistry.js';import {AssetLoader} from '../assets/AssetLoader.js';import {validateConfig} from '../levels/LevelConfig.js';import {HUD} from '../ui/HUD.js';import {MobileControls} from '../ui/MobileControls.js';import {MobileAdapter} from '../platform/MobileAdapter.js';import {Renderer} from './Renderer.js';
+export class Game {
+ constructor(root,config,baseURL){this.root=root;this.config=config;this.baseURL=baseURL;this.debug=new URLSearchParams(location.search).get('debug')==='1';let storage;try{storage=localStorage;}catch{}this.world=new World(config,storage);this.hud=new HUD(root,this.world);this.abort=new AbortController();this.ready=false;this.destroyed=false;this.errors=[];}
+ async start(){try{validateConfig(this.config);this.world.scenes.go('LOADING');this.assets=new AssetRegistry(this.config.assets);await new AssetLoader(this.assets).load(this.baseURL);if(this.destroyed)return;
+ for(const spec of [this.config.player,...Object.values(this.config.enemies),...Object.values(this.config.forms)]){const s=this.assets.size(spec.asset);if(Math.abs(spec.aspect-s.w/s.h)>.001)throw new Error(`Aspect mismatch: ${spec.asset}`);}
+ this.renderer=new Renderer(this.root.querySelector('canvas'),this.assets,this.world);this.controls=new MobileControls(this.root,this.world);this.mobile=new MobileAdapter(this.root,this.renderer.canvas,this.config,portrait=>{this.root.querySelector('.portrait').hidden=!portrait;if(portrait&&this.world.scenes.state==='PLAYING')this.world.scenes.go('PAUSED');});
+ this.hud.onFullscreen=async()=>{if(!await this.mobile.fullscreen())this.hud.toast('Fullscreen unavailable; rotate your phone to play.');};
+ const pause=()=>{this.controls.release();if(this.world.scenes.state==='PLAYING')this.world.scenes.go('PAUSED');};window.addEventListener('blur',pause,{signal:this.abort.signal});document.addEventListener('visibilitychange',()=>{if(document.hidden)pause();},{signal:this.abort.signal});
+ this.world.events.on('coin-pickup',()=>this.tone(700));this.world.events.on('damage',()=>this.tone(180));this.world.events.on('transform',()=>this.tone(500));
+ this.root.addEventListener('pointerdown',()=>this.unlockAudio(),{signal:this.abort.signal});window.addEventListener('keydown',()=>this.unlockAudio(),{signal:this.abort.signal});
+ this.world.scenes.go('MENU');this.ready=true;this.last=performance.now();this.accumulator=0;this.fps=60;this.frameId=requestAnimationFrame(t=>this.frame(t));
+ }catch(error){this.errors.push(error.message);this.hud.error(error);this.world.events.emit('fatal',error);}}
+ unlockAudio(){if(!this.world.save.data.settings.sound)return;try{this.audio??=new(window.AudioContext||window.webkitAudioContext)();if(this.audio.state==='suspended')this.audio.resume().catch(()=>{});}catch{}}
+ tone(f){if(!this.audio||this.audio.state!=='running'||!this.world.save.data.settings.sound)return;const o=this.audio.createOscillator(),gain=this.audio.createGain(),t=this.audio.currentTime;o.connect(gain);gain.connect(this.audio.destination);o.frequency.value=f;gain.gain.setValueAtTime(.025,t);gain.gain.exponentialRampToValueAtTime(.001,t+.09);o.start(t);o.stop(t+.1);o.onended=()=>{o.disconnect();gain.disconnect();};}
+ frame(now){if(this.destroyed)return;try{const elapsed=Math.min(.1,Math.max(0,(now-this.last)/1000));this.last=now;this.fps=this.fps*.95+(1/Math.max(elapsed,.001))*.05;this.accumulator+=elapsed;
+ while(this.accumulator>=1/60){this.world.update(1/60,this.controls.consume());this.accumulator-=1/60;}
+ this.renderer.draw(this.debug);this.hud.update();const panel=this.root.querySelector('.debug');panel.hidden=!this.debug;
+ if(this.debug){const p=this.world.player;panel.textContent=`FPS ${this.fps.toFixed(0)} | ${this.world.scenes.state}\nLevel ${this.world.level?.id??'-'}\nPlayer ${p?`${p.x.toFixed(1)}, ${p.y.toFixed(1)} | HP ${p.hp}`:'-'}\nWeapon ${p?.weapon??'EMPTY'} | Form ${p?.form??'-'}`;}
+ this.frameId=requestAnimationFrame(t=>this.frame(t));}catch(error){this.errors.push(error.message);this.hud.error(error);}}
+ destroy(){this.destroyed=true;cancelAnimationFrame(this.frameId);this.controls?.destroy();this.mobile?.destroy();this.hud.destroy();this.abort.abort();this.audio?.close();}
+}
